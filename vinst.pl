@@ -4,124 +4,176 @@
 # generate instance from verilog rtl.
 #
 # author: Tetsuya Morizumi
-# created: 200x-xx-xx
+# created: 2013-05-29
 # $Id$
 #-----------------------------------------------------------------------------#
 use strict;
+use warnings;
+use Getopt::Std;
+use Verilog::Netlist;
 
 #-----------------------------------------------------------------------------#
 # global environment
 #-----------------------------------------------------------------------------#
 my $indent = "    ";
-my $ts = 16;            # tabstop
-#my $inst_px = "U_";    # instance prefix
-my $inst_px = "";
+my $ts = 4;             # tabstop
+my $inst_px = "u_";     # instance prefix
+#my $inst_px = "";
 
 #-----------------------------------------------------------------------------#
 # main
 #-----------------------------------------------------------------------------#
-if($#ARGV < 0){
-    print "$0 [-e] <verilog file>\n";
+my %opt = ();
+getopts("hie", \%opt);
+
+if($opt{h})
+{
+    &help();
     exit;
 }
 
-my $fill_flag = 1;
-my $file = $ARGV[0];
-if($ARGV[0] eq "-e")
+if($opt{i})
 {
-    $fill_flag = 0;
-    $file = $ARGV[1];
-}
-
-open(VFILE, $file) or die "cannot open file: $file\n";
-
-my $rtl = "";
-while(my $in = <VFILE>){
-    chop($in);
-    # strip comment //
-    $in =~ s/\/\/.*//go;
-    $rtl .= $in;
-}
-
-close(VFILE);
-
-# strip comment /* */
-$rtl =~ s/\/\*[\w\W.]*?\*\///go;
-
-# parse module
-if($rtl =~ /module/o and $rtl =~ /endmodule/o)
+    &make_io_info();
+} else
 {
-    my @modules = split(/endmodule/, $rtl);
-
-    foreach my $m (@modules)
-    {
-        $m =~ s/(^\s+|\s+$)//o;
-        if($m ne "")
-        {
-            &print_instance($m);
-        }
-    }
+    &make_instance();
 }
 
 exit;
 
 #-----------------------------------------------------------------------------#
-# print instance
-#-----------------------------------------------------------------------------#
+sub help()
+{
+    print << "__EOL__";
+Usage: ${0} [OPTION] <verilog file>...
+Options
+    -h  help
+    -i  print i/o infomation
+    -e  empty port connection
+__EOL__
+    exit;
+}
+
+sub make_instance()
+{
+    my @files = @ARGV;
+    my $netlist = new Verilog::Netlist;
+
+    &read_verilog_files($netlist, \@files);
+
+    &print_instance($netlist);
+}
+
+sub make_io_info()
+{
+    my @files = @ARGV;
+    my $netlist = new Verilog::Netlist;
+
+    &read_verilog_files($netlist, \@files);
+
+    &print_io_info($netlist);
+}
+
+sub read_verilog_files()
+{
+    my ($netlist, $filelist) = @_;
+
+    foreach my $file (@{$filelist})
+    {
+        $netlist->read_file(filename => $file);
+    }
+
+    # checkfile
+    my @existfiles = $netlist->files;
+    if($#existfiles == -1)
+    {
+        &help();
+    }
+    $netlist->link();   # connection resolve
+}
+
+sub get_max_portlen()
+{
+    my ($ports) = @_;
+    my $max = 0;
+
+    foreach my $pp (@{$ports})
+    {
+        my $size = length($pp->name);
+        if ($max < $size) { $max = $size; }
+    }
+
+    return $max;
+}
+
 sub print_instance()
 {
-    my $m = shift;
+    my ($netlist) = @_;
 
-    # get module name and ports
-    my $module = "";
-    my $ports = "";
+    foreach my $module ($netlist->modules_sorted)
+    {
+        my @ports = $module->ports_ordered;
+        if ($#ports == -1) { next; }
 
-    if($m =~ /module\s+(\w+)\s*\(([\s\w,]+)\)\s*;/o)
-    {
-        $module = $1;
-        $ports = $2;
-    }
-    else
-    {
-        return;
-    }
+        print $module->name, " ", $inst_px, $module->name, "\n(\n";
 
-    $ports =~ s/\s+//go;
-    my @port = split(/,/, $ports);
+        my $max = &get_max_portlen(\@ports);
+        $max = (int($max/$ts) + 1) * $ts;
 
-    print "$module $inst_px$module\n(\n";
+        my $format = "";
 
-    my $format;
-    if($fill_flag)
-    {
-        $format = sprintf "$indent.%%-%ds(%%-%ds)", $ts-1, $ts-1;
-    }
-    else
-    {
-        $format = sprintf "$indent.%%-%ds()", $ts-1;
-    }
-    
-    my $i = 0;
-    foreach my $p (@port)
-    {
-        if($fill_flag)
+        if($opt{e})
         {
-            printf $format, $p ,$p;
+            $format = sprintf "$indent.%%-%ds()", $max-1;
+        } else
+        {
+            $format = sprintf "$indent.%%-%ds(%%-%ds)", $max-1, $max-1;
         }
-        else
+
+        for(my $ii = 0; $ii <= $#ports; $ii++)
         {
-            printf $format, $p;
+            printf $format, $ports[$ii]->name, $ports[$ii]->name;
+            if($ii != $#ports)
+            {
+                print ",\n";
+            } else
+            {
+                print "\n";
+            }
         }
-        if($i == $#port)
+        print ");\n\n";
+    }
+}
+
+sub print_io_info
+{
+    my ($netlist) = @_;
+
+    foreach my $module ($netlist->modules_sorted)
+    {
+        my @ports = $module->ports_ordered;
+        if($#ports == -1) { next; }
+
+        print "// ", $module->name, "\n";
+
+        my $max = &get_max_portlen(\@ports);
+        $max = (int($max/$ts) + 1) * $ts;
+
+        my $format = sprintf "%%-%ds", $max-1;
+
+        foreach my $pp (@ports)
         {
+            print $pp->direction , "\t";
+            if(defined($pp->net->width) && $pp->net->width != 1)
+            {
+                print '[',$pp->net->msb, ':',$pp->net->lsb,']';
+            }
+            print "\t\t";
+            print $pp->name;
             print "\n";
         }
-        else
-        {
-            print ",\n";
-        }
-        $i++;
+        print "\n";
     }
-    print ");\n";
 }
 
