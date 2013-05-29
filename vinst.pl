@@ -26,7 +26,7 @@ my $inst_px = "u_";     # instance prefix
 my %opt = ();
 getopts("hie", \%opt);
 
-if($opt{h})
+if($opt{h} or $#ARGV == -1)
 {
     &help();
     exit;
