@@ -15,7 +15,6 @@ use Verilog::Netlist;
 #-----------------------------------------------------------------------------#
 # global environment
 #-----------------------------------------------------------------------------#
-my $indent = "    ";
 my $ts = 4;			# tabstop
 my $inst_px = "u_";	# instance prefix
 #my $inst_px = "";
@@ -118,31 +117,43 @@ sub print_instance()
 
 		print $module->name, " ", $inst_px, $module->name, "\n(\n";
 
-		my $max = &get_max_portlen(\@ports);
-		$max = (int($max/$ts) + 1) * $ts;
+		my $pmax = &get_max_portlen(\@ports);
+		$pmax = (int($pmax/$ts) + 1) * $ts;
 
-		my $format = "";
-
-		if($opt{e})
-		{
-			$format = sprintf "$indent.%%-%ds()", $max-1;
-		} else
-		{
-			$format = sprintf "$indent.%%-%ds(%%-%ds)", $max-1, $max-1;
-		}
-
+		my @inst;
 		for(my $ii = 0; $ii <= $#ports; $ii++)
 		{
-			printf $format, $ports[$ii]->name, $ports[$ii]->name;
-			if($ii != $#ports)
+			my $tablen = 0;
+			my $pname = $ports[$ii]->name;
+
+			push @inst, "\t.";
+			push @inst, $pname;
+
+			$tablen = int(($pmax - length($pname) - 1 + $ts - 1) / $ts);
+
+			push @inst, "\t" x $tablen;
+
+			if($opt{e})
 			{
-				print ",\n";
+				push @inst, "()";
 			} else
 			{
-				print "\n";
+				push @inst, "(";
+				push @inst, $pname;
+				push @inst, "\t" x $tablen;
+				push @inst, ")";
+			}
+
+			if($ii != $#ports)
+			{
+				push @inst, ",\n";
+			} else
+			{
+				push @inst, "\n";
 			}
 		}
-		print ");\n\n";
+		push @inst, ");\n\n";
+		print join "", @inst;
 	}
 }
 
@@ -156,11 +167,6 @@ sub print_io_info
 		if($#ports == -1) { next; }
 
 		print "// ", $module->name, "\n";
-
-		my $max = &get_max_portlen(\@ports);
-		$max = (int($max/$ts) + 1) * $ts;
-
-		my $format = sprintf "%%-%ds", $max-1;
 
 		foreach my $pp (@ports)
 		{
